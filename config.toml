@@ -1,0 +1,12 @@
+
+[theme]
+primaryColor="#10B981"
+backgroundColor="#0B1220"
+secondaryBackgroundColor="#111827"
+textColor="#F8FAFC"
+
+[client]
+toolbarMode = "minimal"
+
+[server]
+runOnSave = true
