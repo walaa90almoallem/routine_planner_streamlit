@@ -29,7 +29,6 @@ MONTHS = {
 
 # ================= Supabase: فحص الـ Secrets وإنشاء العميل =================
 def get_client() -> Client:
-    # أسماء المفاتيح الموجودة
     keys_now = list(st.secrets.keys()) if hasattr(st, "secrets") else []
     url = st.secrets.get("supabase_url", "").strip()
     key = st.secrets.get("supabase_anon_key", "").strip()
@@ -44,7 +43,6 @@ def get_client() -> Client:
         )
         st.stop()
 
-    # فحوصات سريعة آمنة (لا نعرض القيم نفسها)
     problems = []
     if not url.startswith("https://") or not url.endswith(".supabase.co"):
         problems.append("شكل supabase_url غير صحيح (لا يبدأ بـ https:// أو لا ينتهي بـ .supabase.co).")
@@ -53,7 +51,6 @@ def get_client() -> Client:
     if len(key) < 100:
         problems.append(f"supabase_anon_key قصير/منسوخ ناقص (الطول = {len(key)}).")
 
-    # عرض ملحوظة تشخيصية (لا تكشف أسرار)
     st.caption(f"تشخيص مؤقت: طول URL = {len(url)} | طول المفتاح = {len(key)} | المفاتيح = {keys_now}")
 
     if problems:
@@ -63,7 +60,7 @@ def get_client() -> Client:
     try:
         return create_client(url, key)
     except Exception as e:
-        st.exception(e)  # يظهر السبب التقني الدقيق في اللوغ
+        st.exception(e)
         st.error("تعذّر إنشاء عميل Supabase. تحقّقي من القيم في Secrets ثم أعيدي التشغيل.")
         st.stop()
 
@@ -121,29 +118,50 @@ st.markdown("<h1>بلانري الجميل 💖</h1>", unsafe_allow_html=True)
 # ================= إنشاء عميل Supabase =================
 SUPA = get_client()
 
-# ================= مصادقة =================
+# ================= مصادقة (تسجيل/إنشاء حساب) باستخدام forms =================
 with st.expander("تسجيل الدخول / إنشاء حساب", expanded=(st.session_state.user is None)):
     tab1, tab2 = st.tabs(["تسجيل دخول", "إنشاء حساب جديد"])
+
+    # ---- تسجيل دخول ----
     with tab1:
-        email = st.text_input("الإيميل", key="login_email")
-        pwd = st.text_input("كلمة المرور", type="password", key="login_pwd")
-        if st.button("دخول"):
+        with st.form("login_form", clear_on_submit=False):
+            email = st.text_input("الإيميل", key="login_email")
+            pwd = st.text_input("كلمة المرور", type="password", key="login_pwd")
+            do_login = st.form_submit_button("دخول")
+        if do_login:
             try:
                 supa_sign_in(email, pwd)
-                st.session_state.user = supa_get_user().user
-                st.success("تم تسجيل الدخول ✅")
-            except Exception:
-                st.error("فشل تسجيل الدخول. تحقّقي من الإيميل/الرمز.")
+                user = supa_get_user().user
+                if user is None:
+                    st.error("تعذّر إحضار المستخدم بعد تسجيل الدخول.")
+                else:
+                    st.session_state.user = user
+                    st.success("تم تسجيل الدخول ✅")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"فشل تسجيل الدخول: {e}")
+
+    # ---- إنشاء حساب جديد ----
     with tab2:
-        email2 = st.text_input("الإيميل الجديد", key="signup_email")
-        pwd2 = st.text_input("كلمة المرور الجديدة", type="password", key="signup_pwd")
-        if st.button("إنشاء حساب"):
+        with st.form("signup_form", clear_on_submit=False):
+            email2 = st.text_input("الإيميل الجديد", key="signup_email")
+            pwd2 = st.text_input("كلمة المرور الجديدة", type="password", key="signup_pwd")
+            do_signup = st.form_submit_button("إنشاء حساب")
+        if do_signup:
             try:
                 supa_sign_up(email2, pwd2)
-                st.success("تم إنشاء الحساب. سجّلي الدخول الآن.")
-            except Exception:
-                st.error("تعذّر إنشاء الحساب.")
+                supa_sign_in(email2, pwd2)
+                user = supa_get_user().user
+                if user is None:
+                    st.warning("تم إنشاء الحساب، لكن يلزم تسجيل الدخول يدويًا.")
+                else:
+                    st.session_state.user = user
+                    st.success("تم إنشاء الحساب وتسجيل الدخول ✅")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"تعذّر إنشاء الحساب: {e}")
 
+# إن لم يتم تسجيل الدخول بعد، أوقفي التنفيذ هنا
 if st.session_state.user is None:
     st.stop()
 
