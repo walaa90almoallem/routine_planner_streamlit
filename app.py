@@ -3,13 +3,9 @@ from datetime import datetime
 import streamlit as st
 
 # إعداد الصفحة
-st.set_page_config(
-    page_title="بلانري الجميل 💖",
-    page_icon="💖",
-    layout="centered",
-)
+st.set_page_config(page_title="بلانري الجميل 💖", page_icon="💖", layout="centered")
 
-# ====== الألوان والتنسيق ======
+# ======= تنسيق وألوان =======
 st.markdown("""
 <style>
 body {
@@ -45,7 +41,7 @@ textarea, input {
 </style>
 """, unsafe_allow_html=True)
 
-# ====== البيانات الأساسية ======
+# ======= الشهور =======
 MONTHS = {
     "jan": {"label": "يناير", "days": 31},
     "feb": {"label": "فبراير", "days": 29},
@@ -61,66 +57,96 @@ MONTHS = {
     "dec": {"label": "ديسمبر", "days": 31},
 }
 
-# حفظ البيانات في الجلسة
+# ======= حالة الجلسة =======
 def init_state():
     if "data" not in st.session_state:
         st.session_state.data = {
             "meta": {"title": "بلانري الجميل 💖", "createdAt": datetime.utcnow().isoformat()},
-            "months": {m: {"days": [False]*MONTHS[m]["days"], "note": ""} for m in MONTHS}
+            "tasks": [""] * 5,
+            "months": {
+                m: {
+                    "tasks": {str(i): [False] * MONTHS[m]["days"] for i in range(1, 6)},
+                    "note": "",
+                }
+                for m in MONTHS
+            },
         }
     if "selected_month" not in st.session_state:
         st.session_state.selected_month = "jan"
 
 init_state()
 
-# ====== الواجهة ======
+# ======= العنوان =======
 st.markdown("<h1>بلانري الجميل 💖</h1>", unsafe_allow_html=True)
 
-# اختيار الشهر
+# ======= أسماء المهام =======
+st.write("### ✨ اكتبي مهامك الخمس:")
+for i in range(5):
+    st.session_state.data["tasks"][i] = st.text_input(
+        f"المهمة {i+1}",
+        value=st.session_state.data["tasks"][i],
+        key=f"task_name_{i}",
+        placeholder="مثال: رياضة، قراءة، تعلم لغة..."
+    )
+
+st.write("---")
+
+# ======= اختيار الشهر =======
 month_keys = list(MONTHS.keys())
 month_labels = [MONTHS[m]["label"] for m in month_keys]
-current_index = month_keys.index(st.session_state.selected_month)
-sel = st.selectbox("اختاري الشهر:", month_labels, index=current_index)
-st.session_state.selected_month = month_keys[month_labels.index(sel)]
+sel_index = month_keys.index(st.session_state.selected_month)
+sel_label = st.selectbox("اختاري الشهر:", month_labels, index=sel_index)
+st.session_state.selected_month = month_keys[month_labels.index(sel_label)]
 
-# حساب التقدم
 mkey = st.session_state.selected_month
 mobj = MONTHS[mkey]
 mstate = st.session_state.data["months"][mkey]
-done_count = sum(1 for d in mstate["days"] if d)
-progress = int((done_count / mobj["days"]) * 100)
 
-st.progress(progress / 100, text=f"تم إنجاز {progress}% ({done_count}/{mobj['days']})")
+st.write("### 🌷 مهام هذا الشهر")
 
-# شبكة الأيام
-st.write("### الأيام")
-cols = st.columns(7)
-for day in range(1, mobj["days"] + 1):
-    c = cols[(day - 1) % 7]
-    done = mstate["days"][day - 1]
-    if c.button(f"{day} {'💗' if done else ''}", key=f"{mkey}_{day}"):
-        mstate["days"][day - 1] = not done
+# ======= عرض المهام =======
+for i, task_name in enumerate(st.session_state.data["tasks"], start=1):
+    if not task_name.strip():
+        continue  # تجاهل المهام الفارغة
 
-st.write("---")
+    days_list = mstate["tasks"][str(i)]
+    done_count = sum(1 for d in days_list if d)
+    progress = int((done_count / mobj["days"]) * 100)
 
-# ملاحظة الشهر
-st.write("### ملاحظات الشهر 🌷")
-note = st.text_area("أضيفي ملاحظاتك أو أفكارك لهذا الشهر:", value=mstate["note"], height=100)
+    st.markdown(f"#### 💕 {task_name}")
+    st.progress(progress / 100, text=f"تم إنجاز {progress}% ({done_count}/{mobj['days']})")
+
+    cols = st.columns(7)
+    for day in range(1, mobj["days"] + 1):
+        c = cols[(day - 1) % 7]
+        done = days_list[day - 1]
+        if c.button(f"{day} {'💗' if done else ''}", key=f"{mkey}_{i}_{day}"):
+            days_list[day - 1] = not done
+
+    st.write("---")
+
+# ======= ملاحظات =======
+st.write("### 🩷 ملاحظات الشهر")
+note = st.text_area("اكتبي ملاحظاتك أو أفكارك لهذا الشهر:", value=mstate["note"], height=100)
 if note != mstate["note"]:
     mstate["note"] = note
 
-# أزرار التحكم
+# ======= أزرار عامة =======
 c1, c2 = st.columns(2)
 with c1:
-    if st.button("تحديد كل الأيام 💕"):
-        mstate["days"] = [True]*mobj["days"]
+    if st.button("تحديد الكل 💖"):
+        for t in mstate["tasks"].values():
+            for d in range(len(t)):
+                t[d] = True
 with c2:
-    if st.button("مسح كل الأيام 🩶"):
-        mstate["days"] = [False]*mobj["days"]
+    if st.button("مسح الكل 🩶"):
+        for t in mstate["tasks"].values():
+            for d in range(len(t)):
+                t[d] = False
+        mstate["note"] = ""
 
+# ======= حفظ ونسخ احتياطية =======
 st.write("---")
-
-# تنزيل ورفع النسخة الاحتياطية
 col1, col2 = st.columns(2)
 with col1:
     st.download_button(
@@ -135,4 +161,4 @@ with col2:
         st.session_state.data = json.load(file)
         st.success("تم الاستيراد بنجاح 🌸")
 
-st.caption("✨ واجهة ناعمة وأنيقة لتتبع روتينك اليومي على مدار العام 💖")
+st.caption("✨ واجهة أنثوية لتتبع مهامك اليومية على مدار العام 💖")
