@@ -1,12 +1,12 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 import streamlit as st
 from supabase import create_client, Client
 
-# ========= إعداد الصفحة =========
+# ================= إعداد الصفحة =================
 st.set_page_config(page_title="بلانري الجميل 💖", page_icon="💖", layout="centered")
 
-# ========= ألوان ناعمة =========
+# ================= تنسيق ألوان ناعمة =================
 st.markdown("""
 <style>
 body { background: linear-gradient(180deg,#fff8fb 0%,#ffeef5 100%); color:#444; font-family:"Tajawal",sans-serif; }
@@ -19,7 +19,7 @@ textarea,input,select { background:#fff; border-radius:10px; border:1px solid #f
 </style>
 """, unsafe_allow_html=True)
 
-# ========= شهور =========
+# ================= الشهور =================
 MONTHS = {
     "jan":{"label":"يناير","days":31},"feb":{"label":"فبراير","days":29},"mar":{"label":"مارس","days":31},
     "apr":{"label":"أبريل","days":30},"may":{"label":"مايو","days":31},"jun":{"label":"يونيو","days":30},
@@ -27,30 +27,49 @@ MONTHS = {
     "oct":{"label":"أكتوبر","days":31},"nov":{"label":"نوفمبر","days":30},"dec":{"label":"ديسمبر","days":31},
 }
 
-# ========= Supabase: دالة تشخيص =========
+# ================= Supabase: فحص الـ Secrets وإنشاء العميل =================
 def get_client() -> Client:
-    # جمع أسماء المفاتيح الموجودة بدون إظهار قيمها
-    available_keys = list(st.secrets.keys()) if hasattr(st, "secrets") else []
-    url = st.secrets.get("supabase_url") if hasattr(st, "secrets") else None
-    key = st.secrets.get("supabase_anon_key") if hasattr(st, "secrets") else None
+    # أسماء المفاتيح الموجودة
+    keys_now = list(st.secrets.keys()) if hasattr(st, "secrets") else []
+    url = st.secrets.get("supabase_url", "").strip()
+    key = st.secrets.get("supabase_anon_key", "").strip()
 
     if not url or not key:
         st.error(
             "⚠️ Secrets ناقصة.\n\n"
-            f"يجب أن يكون لديك مفتاحان بالضبط في Secrets:\n"
-            f"- supabase_url\n- supabase_anon_key\n\n"
-            f"المفاتيح الموجودة حاليًا: {available_keys}"
+            "أضيفي في Settings → Secrets سطرين بالضبط:\n"
+            "supabase_url = \"https://<project-ref>.supabase.co\"\n"
+            "supabase_anon_key = \"<anon public key>\"\n\n"
+            f"المفاتيح الموجودة الآن: {keys_now}"
         )
+        st.stop()
+
+    # فحوصات سريعة آمنة (لا نعرض القيم نفسها)
+    problems = []
+    if not url.startswith("https://") or not url.endswith(".supabase.co"):
+        problems.append("شكل supabase_url غير صحيح (لا يبدأ بـ https:// أو لا ينتهي بـ .supabase.co).")
+    if len(url) < 30:
+        problems.append(f"supabase_url قصير جدًا (الطول = {len(url)}).")
+    if len(key) < 100:
+        problems.append(f"supabase_anon_key قصير/منسوخ ناقص (الطول = {len(key)}).")
+
+    # عرض ملحوظة تشخيصية (لا تكشف أسرار)
+    st.caption(f"تشخيص مؤقت: طول URL = {len(url)} | طول المفتاح = {len(key)} | المفاتيح = {keys_now}")
+
+    if problems:
+        st.error("مشاكل في Secrets:\n- " + "\n- ".join(problems))
         st.stop()
 
     try:
         return create_client(url, key)
     except Exception as e:
-        st.error("تعذّر إنشاء عميل Supabase. تحقّقي من صحة القيم في Secrets.")
+        st.exception(e)  # يظهر السبب التقني الدقيق في اللوغ
+        st.error("تعذّر إنشاء عميل Supabase. تحقّقي من القيم في Secrets ثم أعيدي التشغيل.")
         st.stop()
 
 SUPA: Client | None = None
 
+# ================= دوال auth والقراءة/الحفظ =================
 def supa_sign_up(email, password):
     return SUPA.auth.sign_up({"email": email, "password": password})
 
@@ -68,13 +87,13 @@ def load_cloud_data(user_id):
 
 def save_cloud_data(user_id, data):
     SUPA.table("planner_data").upsert(
-        {"user_id": user_id, "data": data, "updated_at": datetime.utcnow().isoformat()}
+        {"user_id": user_id, "data": data, "updated_at": datetime.now(timezone.utc).isoformat()}
     ).execute()
 
-# ========= حالة افتراضية محلية =========
+# ================= الحالة الافتراضية =================
 def blank_state():
     return {
-        "meta": {"createdAt": datetime.utcnow().isoformat()},
+        "meta": {"createdAt": datetime.now(timezone.utc).isoformat()},
         "tasks": {},        # {"1":"رياضة", ...}
         "next_id": 1,
         "months": {m: {"tasks": {}, "note": ""} for m in MONTHS},
@@ -88,7 +107,7 @@ def ensure_month_shapes(data):
             if tid not in data["months"][m]["tasks"]:
                 data["months"][m]["tasks"][tid] = [False] * mobj["days"]
 
-# ========= تهيئة جلسة =========
+# ================= تهيئة الجلسة =================
 if "data" not in st.session_state: st.session_state.data = blank_state()
 if "selected_month" not in st.session_state:
     st.session_state.selected_month = list(MONTHS.keys())[datetime.now().month - 1]
@@ -96,13 +115,13 @@ if "selected_task_id" not in st.session_state: st.session_state.selected_task_id
 if "user" not in st.session_state: st.session_state.user = None
 if "cloud_loaded" not in st.session_state: st.session_state.cloud_loaded = False
 
-# ========= ترويسة =========
+# ================= العنوان =================
 st.markdown("<h1>بلانري الجميل 💖</h1>", unsafe_allow_html=True)
 
-# ========= تهيئة Supabase =========
+# ================= إنشاء عميل Supabase =================
 SUPA = get_client()
 
-# ========= مصادقة =========
+# ================= مصادقة =================
 with st.expander("تسجيل الدخول / إنشاء حساب", expanded=(st.session_state.user is None)):
     tab1, tab2 = st.tabs(["تسجيل دخول", "إنشاء حساب جديد"])
     with tab1:
@@ -128,7 +147,7 @@ with st.expander("تسجيل الدخول / إنشاء حساب", expanded=(st.s
 if st.session_state.user is None:
     st.stop()
 
-# تحميل بيانات المستخدم مرة واحدة
+# ================= تحميل/تهيئة بيانات المستخدم =================
 if not st.session_state.cloud_loaded:
     uid = st.session_state.user.id
     cloud = load_cloud_data(uid)
@@ -141,7 +160,7 @@ if not st.session_state.cloud_loaded:
 data = st.session_state.data
 ensure_month_shapes(data)
 
-# ========= إدارة المهام =========
+# ================= إدارة المهام =================
 st.write("### ✨ إدارة مهامي")
 new_task = st.text_input("اسم المهمة", placeholder="مثال: رياضة صباحية، قراءة…")
 colA, colB = st.columns([1,1])
@@ -168,7 +187,7 @@ with colB:
         save_cloud_data(st.session_state.user.id, data)
         st.info("تم حذف المهمة.")
 
-# ========= اختيار الشهر والمهمة =========
+# ================= اختيار الشهر والمهمة =================
 month_keys = list(MONTHS.keys())
 month_labels = [MONTHS[m]["label"] for m in month_keys]
 cur_idx = month_keys.index(st.session_state.selected_month)
@@ -190,7 +209,7 @@ st.markdown(f"<span class='task-badge'>المهمة المختارة: {tasks_dic
 
 st.write("---"); st.markdown("### بلانر هذه المهمة")
 
-# ========= بلانر المهمة للشهر =========
+# ================= بلانر المهمة للشهر =================
 mkey = st.session_state.selected_month
 mobj = MONTHS[mkey]
 mstate = data["months"][mkey]
