@@ -63,14 +63,17 @@ def init_state():
         st.session_state.data = {
             "meta": {"title": "بلانري الجميل 💖", "createdAt": datetime.utcnow().isoformat()},
             "tasks": [""] * 5,
-            "months": {
-                m: {
-                    "tasks": {str(i): [False] * MONTHS[m]["days"] for i in range(1, 6)},
-                    "note": "",
-                }
-                for m in MONTHS
-            },
+            "months": {},
         }
+
+    for m in MONTHS:
+        if m not in st.session_state.data["months"]:
+            st.session_state.data["months"][m] = {"tasks": {}, "note": ""}
+        # تأكيد وجود المهام في كل شهر
+        for i in range(1, 6):
+            if str(i) not in st.session_state.data["months"][m]["tasks"]:
+                st.session_state.data["months"][m]["tasks"][str(i)] = [False] * MONTHS[m]["days"]
+
     if "selected_month" not in st.session_state:
         st.session_state.selected_month = "jan"
 
@@ -86,9 +89,7 @@ if "tasks" not in st.session_state.data or not isinstance(st.session_state.data[
     st.session_state.data["tasks"] = [""] * 5
 
 for i in range(5):
-    current_value = ""
-    if i < len(st.session_state.data["tasks"]):
-        current_value = st.session_state.data["tasks"][i]
+    current_value = st.session_state.data["tasks"][i] if i < len(st.session_state.data["tasks"]) else ""
     new_value = st.text_input(
         f"المهمة {i+1}",
         value=current_value,
@@ -110,14 +111,20 @@ mkey = st.session_state.selected_month
 mobj = MONTHS[mkey]
 mstate = st.session_state.data["months"][mkey]
 
-st.write("### 🌷 مهام هذا الشهر")
+st.markdown("### 🌷 مهام هذا الشهر")
 
 # ======= عرض المهام =======
 for i, task_name in enumerate(st.session_state.data["tasks"], start=1):
     if not task_name.strip():
         continue
 
-    days_list = mstate["tasks"].get(str(i), [False] * mobj["days"])
+    # تأكيد وجود المهمة في بيانات الشهر
+    if "tasks" not in mstate:
+        mstate["tasks"] = {}
+    if str(i) not in mstate["tasks"]:
+        mstate["tasks"][str(i)] = [False] * mobj["days"]
+
+    days_list = mstate["tasks"][str(i)]
     done_count = sum(1 for d in days_list if d)
     progress = int((done_count / mobj["days"]) * 100)
 
@@ -135,8 +142,8 @@ for i, task_name in enumerate(st.session_state.data["tasks"], start=1):
 
 # ======= الملاحظات =======
 st.write("### 🩷 ملاحظات الشهر")
-note = st.text_area("اكتبي ملاحظاتك أو أفكارك لهذا الشهر:", value=mstate["note"], height=100)
-if note != mstate["note"]:
+note = st.text_area("اكتبي ملاحظاتك أو أفكارك لهذا الشهر:", value=mstate.get("note", ""), height=100)
+if note != mstate.get("note", ""):
     mstate["note"] = note
 
 # ======= أزرار عامة =======
