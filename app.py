@@ -1,12 +1,20 @@
+# app.py
+# ——————————————————————————————————————————
+# بلانر مهام شهري (عربي) مع تخزين على Supabase + تشخيص اتصال واضح
+# ——————————————————————————————————————————
+
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 import streamlit as st
+
+# نستخدم httpx للفحص السريع للرابط قبل إنشاء عميل Supabase
+import httpx
+
+# مكتبة supabase الرسمية (>=2.6.0,<3.0)
 from supabase import create_client, Client
 
-# ================= إعداد الصفحة =================
+# ========= إعداد الصفحة + ستايل بسيط =========
 st.set_page_config(page_title="بلانري الجميل 💖", page_icon="💖", layout="centered")
-
-# ================= تنسيق ألوان ناعمة =================
 st.markdown("""
 <style>
 body { background: linear-gradient(180deg,#fff8fb 0%,#ffeef5 100%); color:#444; font-family:"Tajawal",sans-serif; }
@@ -16,81 +24,87 @@ h1,h2,h3 { text-align:center; color:#d63384; font-weight:700; }
 [data-testid="stProgress"]>div>div { background:#ffb6c1; }
 textarea,input,select { background:#fff; border-radius:10px; border:1px solid #ffd6e0; }
 .task-badge{display:inline-block;padding:.25rem .6rem;background:#ffe3ea;border-radius:999px;color:#c2185b;font-weight:700;}
+hr{border:none;border-top:1px solid #ffd6e0;margin:1rem 0;}
 </style>
 """, unsafe_allow_html=True)
 
-# ================= الشهور =================
+# ========= شهور =========
 MONTHS = {
-    "jan":{"label":"يناير","days":31},"feb":{"label":"فبراير","days":29},"mar":{"label":"مارس","days":31},
-    "apr":{"label":"أبريل","days":30},"may":{"label":"مايو","days":31},"jun":{"label":"يونيو","days":30},
-    "jul":{"label":"يوليو","days":31},"aug":{"label":"أغسطس","days":31},"sep":{"label":"سبتمبر","days":30},
-    "oct":{"label":"أكتوبر","days":31},"nov":{"label":"نوفمبر","days":30},"dec":{"label":"ديسمبر","days":31},
+    "jan":{"label":"يناير","days":31}, "feb":{"label":"فبراير","days":29}, "mar":{"label":"مارس","days":31},
+    "apr":{"label":"أبريل","days":30}, "may":{"label":"مايو","days":31}, "jun":{"label":"يونيو","days":30},
+    "jul":{"label":"يوليو","days":31}, "aug":{"label":"أغسطس","days":31}, "sep":{"label":"سبتمبر","days":30},
+    "oct":{"label":"أكتوبر","days":31}, "nov":{"label":"نوفمبر","days":30}, "dec":{"label":"ديسمبر","days":31},
 }
 
-# ================= Supabase: فحص الـ Secrets وإنشاء العميل =================
+# ========= دالة إنشاء عميل Supabase مع تشخيص قوي =========
 def get_client() -> Client:
-    keys_now = list(st.secrets.keys()) if hasattr(st, "secrets") else []
-    url = st.secrets.get("supabase_url", "").strip()
-    key = st.secrets.get("supabase_anon_key", "").strip()
-
-    if not url or not key:
-        st.error(
-            "⚠️ Secrets ناقصة.\n\n"
-            "أضيفي في Settings → Secrets سطرين بالضبط:\n"
-            "supabase_url = \"https://<project-ref>.supabase.co\"\n"
-            "supabase_anon_key = \"<anon public key>\"\n\n"
-            f"المفاتيح الموجودة الآن: {keys_now}"
-        )
-        st.stop()
-
-    problems = []
-    if not url.startswith("https://") or not url.endswith(".supabase.co"):
-        problems.append("شكل supabase_url غير صحيح (لا يبدأ بـ https:// أو لا ينتهي بـ .supabase.co).")
-    if len(url) < 30:
-        problems.append(f"supabase_url قصير جدًا (الطول = {len(url)}).")
-    if len(key) < 100:
-        problems.append(f"supabase_anon_key قصير/منسوخ ناقص (الطول = {len(key)}).")
-
-    st.caption(f"تشخيص مؤقت: طول URL = {len(url)} | طول المفتاح = {len(key)} | المفاتيح = {keys_now}")
-
-    if problems:
-        st.error("مشاكل في Secrets:\n- " + "\n- ".join(problems))
-        st.stop()
-
+    """
+    - تقرأ supabase_url و supabase_anon_key من Secrets
+    - تعرض القيم المقروءة (repr + الطول) على الشاشة
+    - تفحص DNS/HTTP قبل إنشاء عميل Supabase
+    """
+    # 1) قراءة Secrets بأمان مع strip لإزالة أي مسافات خفية
     try:
-        return create_client(url, key)
+        url = st.secrets.get("supabase_url", "").strip()
+        key = st.secrets.get("supabase_anon_key", "").strip()
     except Exception as e:
-        st.exception(e)
-        st.error("تعذّر إنشاء عميل Supabase. تحقّقي من القيم في Secrets ثم أعيدي التشغيل.")
+        st.error(f"⚠️ لم أستطع قراءة Secrets: {e}")
         st.stop()
 
-SUPA: Client | None = None
+    # 2) تشخيص: أعرض القيم الفعلية التي يقرأها التطبيق
+    st.caption(f"🔎 diag: supabase_url={repr(url)} | len={len(url)}")
+    st.caption(f"🔎 diag: anon_key_len={len(key)}")
 
-# ================= دوال auth والقراءة/الحفظ =================
-def supa_sign_up(email, password):
-    return SUPA.auth.sign_up({"email": email, "password": password})
+    # 3) تحقّق سريع من الشكل
+    if not url or not key:
+        st.error("⚠️ Secrets ناقصة. تأكدي من إدخال السطرين بالضبط في Settings → Secrets.")
+        st.stop()
+    if not url.startswith("https://") or ".supabase.co" not in url:
+        st.error("⚠️ صيغة الرابط غير صحيحة (لازم ينتهي بـ .supabase.co). تأكدي من النسخ الحرفي من Supabase.")
+        st.stop()
 
-def supa_sign_in(email, password):
-    return SUPA.auth.sign_in_with_password({"email": email, "password": password})
+    # 4) فحص DNS/HTTP — إذا فشل بيظهر السبب (بيوضح مشاكل من نوع Name or service not known)
+    try:
+        r = httpx.get(url, timeout=5.0)
+        st.caption(f"🔎 probe: GET {url} → status={r.status_code}")
+    except Exception as e:
+        st.error(f"⚠️ فشل فحص الرابط (DNS/Network): {e}\nتحقّقي من أن الرابط مكتوب تمامًا مثل لوحة Supabase.")
+        st.stop()
 
-def supa_get_user():
-    return SUPA.auth.get_user()
+    # 5) إنشاء عميل Supabase
+    try:
+        supa = create_client(url, key)
+        return supa
+    except Exception as e:
+        st.error(f"⚠️ تعذّر إنشاء عميل Supabase: {e}")
+        st.stop()
 
-def load_cloud_data(user_id):
-    res = SUPA.table("planner_data").select("data").eq("user_id", user_id).maybe_single().execute()
+# ========= دوال Supabase مساعدة =========
+def supa_sign_up(supa: Client, email, password):
+    return supa.auth.sign_up({"email": email, "password": password})
+
+def supa_sign_in(supa: Client, email, password):
+    return supa.auth.sign_in_with_password({"email": email, "password": password})
+
+def supa_get_user(supa: Client):
+    return supa.auth.get_user()
+
+def load_cloud_data(supa: Client, user_id: str):
+    res = supa.table("planner_data").select("data").eq("user_id", user_id).maybe_single().execute()
     if res.data:
-        return res.data["data"]
+        # res.data قد تكون dict أو {'data': {...}}
+        return res.data.get("data") if isinstance(res.data, dict) else res.data
     return None
 
-def save_cloud_data(user_id, data):
-    SUPA.table("planner_data").upsert(
-        {"user_id": user_id, "data": data, "updated_at": datetime.now(timezone.utc).isoformat()}
+def save_cloud_data(supa: Client, user_id: str, data):
+    supa.table("planner_data").upsert(
+        {"user_id": user_id, "data": data, "updated_at": datetime.utcnow().isoformat()}
     ).execute()
 
-# ================= الحالة الافتراضية =================
+# ========= حالة افتراضية محلية =========
 def blank_state():
     return {
-        "meta": {"createdAt": datetime.now(timezone.utc).isoformat()},
+        "meta": {"createdAt": datetime.utcnow().isoformat()},
         "tasks": {},        # {"1":"رياضة", ...}
         "next_id": 1,
         "months": {m: {"tasks": {}, "note": ""} for m in MONTHS},
@@ -100,85 +114,74 @@ def ensure_month_shapes(data):
     for m, mobj in MONTHS.items():
         if m not in data["months"]:
             data["months"][m] = {"tasks": {}, "note": ""}
-        for tid in list(data["tasks"].keys()):
+        for tid, _ in data["tasks"].items():
             if tid not in data["months"][m]["tasks"]:
                 data["months"][m]["tasks"][tid] = [False] * mobj["days"]
 
-# ================= تهيئة الجلسة =================
+# ========= تهيئة جلسة =========
 if "data" not in st.session_state: st.session_state.data = blank_state()
 if "selected_month" not in st.session_state:
-    st.session_state.selected_month = list(MONTHS.keys())[datetime.now().month - 1]
+    month_key = list(MONTHS.keys())[datetime.now().month - 1]
+    st.session_state.selected_month = month_key
 if "selected_task_id" not in st.session_state: st.session_state.selected_task_id = None
 if "user" not in st.session_state: st.session_state.user = None
 if "cloud_loaded" not in st.session_state: st.session_state.cloud_loaded = False
+if "supa" not in st.session_state: st.session_state.supa = None
 
-# ================= العنوان =================
+# ========= ترويسة =========
 st.markdown("<h1>بلانري الجميل 💖</h1>", unsafe_allow_html=True)
 
-# ================= إنشاء عميل Supabase =================
+# ========= تهيئة Supabase (مع التشخيص) =========
 SUPA = get_client()
+st.session_state.supa = SUPA  # نحتفظ به للاستخدام
 
-# ================= مصادقة (تسجيل/إنشاء حساب) باستخدام forms =================
+# ========= مصادقة (تسجيل/تسجيل دخول) =========
 with st.expander("تسجيل الدخول / إنشاء حساب", expanded=(st.session_state.user is None)):
     tab1, tab2 = st.tabs(["تسجيل دخول", "إنشاء حساب جديد"])
-
-    # ---- تسجيل دخول ----
     with tab1:
-        with st.form("login_form", clear_on_submit=False):
-            email = st.text_input("الإيميل", key="login_email")
-            pwd = st.text_input("كلمة المرور", type="password", key="login_pwd")
-            do_login = st.form_submit_button("دخول")
-        if do_login:
+        email = st.text_input("الإيميل", key="login_email")
+        pwd = st.text_input("كلمة المرور", type="password", key="login_pwd")
+        if st.button("دخول"):
             try:
-                supa_sign_in(email, pwd)
-                user = supa_get_user().user
-                if user is None:
-                    st.error("تعذّر إحضار المستخدم بعد تسجيل الدخول.")
-                else:
-                    st.session_state.user = user
-                    st.success("تم تسجيل الدخول ✅")
-                    st.rerun()
+                supa_sign_in(SUPA, email, pwd)
+                user = supa_get_user(SUPA).user
+                st.session_state.user = user
+                st.success("تم تسجيل الدخول ✅")
             except Exception as e:
                 st.error(f"فشل تسجيل الدخول: {e}")
-
-    # ---- إنشاء حساب جديد ----
     with tab2:
-        with st.form("signup_form", clear_on_submit=False):
-            email2 = st.text_input("الإيميل الجديد", key="signup_email")
-            pwd2 = st.text_input("كلمة المرور الجديدة", type="password", key="signup_pwd")
-            do_signup = st.form_submit_button("إنشاء حساب")
-        if do_signup:
+        email2 = st.text_input("الإيميل الجديد", key="signup_email")
+        pwd2 = st.text_input("كلمة المرور الجديدة", type="password", key="signup_pwd")
+        if st.button("إنشاء حساب"):
             try:
-                supa_sign_up(email2, pwd2)
-                supa_sign_in(email2, pwd2)
-                user = supa_get_user().user
-                if user is None:
-                    st.warning("تم إنشاء الحساب، لكن يلزم تسجيل الدخول يدويًا.")
-                else:
-                    st.session_state.user = user
-                    st.success("تم إنشاء الحساب وتسجيل الدخول ✅")
-                    st.rerun()
+                supa_sign_up(SUPA, email2, pwd2)
+                st.success("تم إنشاء الحساب. سجّلي الدخول الآن.")
             except Exception as e:
                 st.error(f"تعذّر إنشاء الحساب: {e}")
 
-# إن لم يتم تسجيل الدخول بعد، أوقفي التنفيذ هنا
 if st.session_state.user is None:
+    st.info("سجّلي الدخول أو أنشئي حسابًا للمتابعة.")
     st.stop()
 
-# ================= تحميل/تهيئة بيانات المستخدم =================
+# ========= تحميل/حفظ بيانات المستخدم =========
 if not st.session_state.cloud_loaded:
-    uid = st.session_state.user.id
-    cloud = load_cloud_data(uid)
-    if cloud:
-        st.session_state.data = cloud
-    else:
-        save_cloud_data(uid, st.session_state.data)
-    st.session_state.cloud_loaded = True
+    user_id = st.session_state.user.id
+    try:
+        cloud = load_cloud_data(SUPA, user_id)
+        if cloud:
+            st.session_state.data = cloud
+        else:
+            # أول مرة: أنشئي صف للمستخدم
+            save_cloud_data(SUPA, user_id, st.session_state.data)
+        st.session_state.cloud_loaded = True
+    except Exception as e:
+        st.error(f"فشل تحميل بيانات السحابة: {e}")
+        st.stop()
 
 data = st.session_state.data
 ensure_month_shapes(data)
 
-# ================= إدارة المهام =================
+# ========= إدارة المهام =========
 st.write("### ✨ إدارة مهامي")
 new_task = st.text_input("اسم المهمة", placeholder="مثال: رياضة صباحية، قراءة…")
 colA, colB = st.columns([1,1])
@@ -191,7 +194,7 @@ with colA:
             for m, mobj in MONTHS.items():
                 data["months"][m]["tasks"][tid] = [False] * mobj["days"]
             st.session_state.selected_task_id = tid
-            save_cloud_data(st.session_state.user.id, data)
+            save_cloud_data(SUPA, st.session_state.user.id, data)
             st.success("تمت إضافة المهمة ✨")
         else:
             st.warning("اكتبي اسم المهمة أولًا.")
@@ -202,14 +205,14 @@ with colB:
         for m in data["months"].values():
             m["tasks"].pop(tid, None)
         st.session_state.selected_task_id = None
-        save_cloud_data(st.session_state.user.id, data)
+        save_cloud_data(SUPA, st.session_state.user.id, data)
         st.info("تم حذف المهمة.")
 
-# ================= اختيار الشهر والمهمة =================
+# ========= اختيار الشهر والمهمة =========
 month_keys = list(MONTHS.keys())
 month_labels = [MONTHS[m]["label"] for m in month_keys]
 cur_idx = month_keys.index(st.session_state.selected_month)
-sel_label = st.selectbox("اختاري الشهر الذي أنتِ فيه:", month_labels, index=cur_idx)
+sel_label = st.selectbox("اختاري الشهر:", month_labels, index=cur_idx)
 st.session_state.selected_month = month_keys[month_labels.index(sel_label)]
 
 tasks_dict = data["tasks"]
@@ -227,7 +230,7 @@ st.markdown(f"<span class='task-badge'>المهمة المختارة: {tasks_dic
 
 st.write("---"); st.markdown("### بلانر هذه المهمة")
 
-# ================= بلانر المهمة للشهر =================
+# ========= بلانر المهمة للشهر =========
 mkey = st.session_state.selected_month
 mobj = MONTHS[mkey]
 mstate = data["months"][mkey]
@@ -258,7 +261,6 @@ if note_after != note_before:
     mstate["note"] = note_after
     dirty = True
 
-# أزرار سريعة
 a,b = st.columns(2)
 with a:
     if st.button("تحديد كل الأيام لهذه المهمة 💖"):
@@ -269,25 +271,26 @@ with b:
         for i in range(len(days_list)): days_list[i] = False
         dirty = True
 
-# حفظ تلقائي عند أي تعديل
 if dirty:
-    save_cloud_data(st.session_state.user.id, data)
+    save_cloud_data(SUPA, st.session_state.user.id, data)
     st.toast("تم الحفظ ✨", icon="💾")
 
-# نسخ احتياطي يدوي (اختياري)
+# نسخ احتياطي يدوي
 c1,c2 = st.columns(2)
 with c1:
-    st.download_button("تنزيل نسخة احتياطية 💾",
+    st.download_button(
+        "تنزيل نسخة احتياطية 💾",
         data=json.dumps(data, ensure_ascii=False, indent=2),
         file_name="routine_backup.json",
-        mime="application/json")
+        mime="application/json",
+    )
 with c2:
     up = st.file_uploader("استيراد نسخة", type=["json"])
     if up:
         try:
             st.session_state.data = json.load(up)
             ensure_month_shapes(st.session_state.data)
-            save_cloud_data(st.session_state.user.id, st.session_state.data)
+            save_cloud_data(SUPA, st.session_state.user.id, st.session_state.data)
             st.success("تم الاستيراد والحفظ سحابيًا 🌸")
         except Exception:
             st.error("ملف غير صالح.")
