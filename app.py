@@ -27,11 +27,27 @@ MONTHS = {
     "oct":{"label":"أكتوبر","days":31},"nov":{"label":"نوفمبر","days":30},"dec":{"label":"ديسمبر","days":31},
 }
 
-# ========= Supabase =========
+# ========= Supabase: دالة تشخيص =========
 def get_client() -> Client:
-    url = st.secrets["supabase_url"]
-    key = st.secrets["supabase_anon_key"]
-    return create_client(url, key)
+    # جمع أسماء المفاتيح الموجودة بدون إظهار قيمها
+    available_keys = list(st.secrets.keys()) if hasattr(st, "secrets") else []
+    url = st.secrets.get("supabase_url") if hasattr(st, "secrets") else None
+    key = st.secrets.get("supabase_anon_key") if hasattr(st, "secrets") else None
+
+    if not url or not key:
+        st.error(
+            "⚠️ Secrets ناقصة.\n\n"
+            f"يجب أن يكون لديك مفتاحان بالضبط في Secrets:\n"
+            f"- supabase_url\n- supabase_anon_key\n\n"
+            f"المفاتيح الموجودة حاليًا: {available_keys}"
+        )
+        st.stop()
+
+    try:
+        return create_client(url, key)
+    except Exception as e:
+        st.error("تعذّر إنشاء عميل Supabase. تحقّقي من صحة القيم في Secrets.")
+        st.stop()
 
 SUPA: Client | None = None
 
@@ -51,7 +67,6 @@ def load_cloud_data(user_id):
     return None
 
 def save_cloud_data(user_id, data):
-    # upsert يحفظ أول مرة ثم يحدّث لاحقًا
     SUPA.table("planner_data").upsert(
         {"user_id": user_id, "data": data, "updated_at": datetime.utcnow().isoformat()}
     ).execute()
@@ -66,19 +81,17 @@ def blank_state():
     }
 
 def ensure_month_shapes(data):
-    # تأكيد هيكل الشهور والمهام
     for m, mobj in MONTHS.items():
         if m not in data["months"]:
             data["months"][m] = {"tasks": {}, "note": ""}
-        for tid, name in data["tasks"].items():
+        for tid in list(data["tasks"].keys()):
             if tid not in data["months"][m]["tasks"]:
                 data["months"][m]["tasks"][tid] = [False] * mobj["days"]
 
 # ========= تهيئة جلسة =========
 if "data" not in st.session_state: st.session_state.data = blank_state()
 if "selected_month" not in st.session_state:
-    month_key = list(MONTHS.keys())[datetime.now().month - 1]
-    st.session_state.selected_month = month_key
+    st.session_state.selected_month = list(MONTHS.keys())[datetime.now().month - 1]
 if "selected_task_id" not in st.session_state: st.session_state.selected_task_id = None
 if "user" not in st.session_state: st.session_state.user = None
 if "cloud_loaded" not in st.session_state: st.session_state.cloud_loaded = False
@@ -87,13 +100,9 @@ if "cloud_loaded" not in st.session_state: st.session_state.cloud_loaded = False
 st.markdown("<h1>بلانري الجميل 💖</h1>", unsafe_allow_html=True)
 
 # ========= تهيئة Supabase =========
-try:
-    SUPA = get_client()
-except Exception:
-    st.error("لم يتم ضبط مفاتيح Supabase في Secrets.")
-    st.stop()
+SUPA = get_client()
 
-# ========= مصادقة (تسجيل/تسجيل دخول) =========
+# ========= مصادقة =========
 with st.expander("تسجيل الدخول / إنشاء حساب", expanded=(st.session_state.user is None)):
     tab1, tab2 = st.tabs(["تسجيل دخول", "إنشاء حساب جديد"])
     with tab1:
@@ -102,10 +111,9 @@ with st.expander("تسجيل الدخول / إنشاء حساب", expanded=(st.s
         if st.button("دخول"):
             try:
                 supa_sign_in(email, pwd)
-                user = supa_get_user().user
-                st.session_state.user = user
+                st.session_state.user = supa_get_user().user
                 st.success("تم تسجيل الدخول ✅")
-            except Exception as e:
+            except Exception:
                 st.error("فشل تسجيل الدخول. تحقّقي من الإيميل/الرمز.")
     with tab2:
         email2 = st.text_input("الإيميل الجديد", key="signup_email")
@@ -114,27 +122,26 @@ with st.expander("تسجيل الدخول / إنشاء حساب", expanded=(st.s
             try:
                 supa_sign_up(email2, pwd2)
                 st.success("تم إنشاء الحساب. سجّلي الدخول الآن.")
-            except Exception as e:
+            except Exception:
                 st.error("تعذّر إنشاء الحساب.")
 
 if st.session_state.user is None:
     st.stop()
 
-# بعد تسجيل الدخول: حمّلي بيانات السحابة مرة واحدة
+# تحميل بيانات المستخدم مرة واحدة
 if not st.session_state.cloud_loaded:
-    user_id = st.session_state.user.id
-    cloud = load_cloud_data(user_id)
+    uid = st.session_state.user.id
+    cloud = load_cloud_data(uid)
     if cloud:
         st.session_state.data = cloud
     else:
-        # أول دخول: احفظ حالة فارغة للمستخدم
-        save_cloud_data(user_id, st.session_state.data)
+        save_cloud_data(uid, st.session_state.data)
     st.session_state.cloud_loaded = True
 
 data = st.session_state.data
 ensure_month_shapes(data)
 
-# ========= إضافة/حذف مهام =========
+# ========= إدارة المهام =========
 st.write("### ✨ إدارة مهامي")
 new_task = st.text_input("اسم المهمة", placeholder="مثال: رياضة صباحية، قراءة…")
 colA, colB = st.columns([1,1])
@@ -144,7 +151,6 @@ with colA:
         if name:
             tid = str(data["next_id"]); data["next_id"] += 1
             data["tasks"][tid] = name
-            # إنشاء مصفوفة أيام لكل شهر لهذه المهمة
             for m, mobj in MONTHS.items():
                 data["months"][m]["tasks"][tid] = [False] * mobj["days"]
             st.session_state.selected_task_id = tid
