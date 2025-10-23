@@ -57,7 +57,7 @@ MONTHS = {
     "dec": {"label": "ديسمبر", "days": 31},
 }
 
-# ======= حالة الجلسة =======
+# ======= تهيئة الجلسة =======
 def init_state():
     if "data" not in st.session_state:
         st.session_state.data = {
@@ -81,13 +81,21 @@ st.markdown("<h1>بلانري الجميل 💖</h1>", unsafe_allow_html=True)
 
 # ======= أسماء المهام =======
 st.write("### ✨ اكتبي مهامك الخمس:")
+
+if "tasks" not in st.session_state.data or not isinstance(st.session_state.data["tasks"], list):
+    st.session_state.data["tasks"] = [""] * 5
+
 for i in range(5):
-    st.session_state.data["tasks"][i] = st.text_input(
+    current_value = ""
+    if i < len(st.session_state.data["tasks"]):
+        current_value = st.session_state.data["tasks"][i]
+    new_value = st.text_input(
         f"المهمة {i+1}",
-        value=st.session_state.data["tasks"][i],
+        value=current_value,
         key=f"task_name_{i}",
         placeholder="مثال: رياضة، قراءة، تعلم لغة..."
     )
+    st.session_state.data["tasks"][i] = new_value
 
 st.write("---")
 
@@ -107,9 +115,9 @@ st.write("### 🌷 مهام هذا الشهر")
 # ======= عرض المهام =======
 for i, task_name in enumerate(st.session_state.data["tasks"], start=1):
     if not task_name.strip():
-        continue  # تجاهل المهام الفارغة
+        continue
 
-    days_list = mstate["tasks"][str(i)]
+    days_list = mstate["tasks"].get(str(i), [False] * mobj["days"])
     done_count = sum(1 for d in days_list if d)
     progress = int((done_count / mobj["days"]) * 100)
 
@@ -122,10 +130,10 @@ for i, task_name in enumerate(st.session_state.data["tasks"], start=1):
         done = days_list[day - 1]
         if c.button(f"{day} {'💗' if done else ''}", key=f"{mkey}_{i}_{day}"):
             days_list[day - 1] = not done
-
+    mstate["tasks"][str(i)] = days_list
     st.write("---")
 
-# ======= ملاحظات =======
+# ======= الملاحظات =======
 st.write("### 🩷 ملاحظات الشهر")
 note = st.text_area("اكتبي ملاحظاتك أو أفكارك لهذا الشهر:", value=mstate["note"], height=100)
 if note != mstate["note"]:
@@ -145,7 +153,7 @@ with c2:
                 t[d] = False
         mstate["note"] = ""
 
-# ======= حفظ ونسخ احتياطية =======
+# ======= النسخ الاحتياطي =======
 st.write("---")
 col1, col2 = st.columns(2)
 with col1:
@@ -158,7 +166,10 @@ with col1:
 with col2:
     file = st.file_uploader("استيراد نسخة", type=["json"])
     if file:
-        st.session_state.data = json.load(file)
-        st.success("تم الاستيراد بنجاح 🌸")
+        try:
+            st.session_state.data = json.load(file)
+            st.success("تم الاستيراد بنجاح 🌸")
+        except Exception:
+            st.error("حدث خطأ أثناء الاستيراد. تأكدي من أن الملف صحيح.")
 
 st.caption("✨ واجهة أنثوية لتتبع مهامك اليومية على مدار العام 💖")
