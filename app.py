@@ -1,199 +1,250 @@
 import json
 from datetime import datetime
 import streamlit as st
+from supabase import create_client, Client
 
 # ========= إعداد الصفحة =========
 st.set_page_config(page_title="بلانري الجميل 💖", page_icon="💖", layout="centered")
 
-# ========= ألوان ناعمة (زهري + أبيض) =========
+# ========= ألوان ناعمة =========
 st.markdown("""
 <style>
-body {
-  background: linear-gradient(180deg, #fff8fb 0%, #ffeef5 100%);
-  color: #444;
-  font-family: "Tajawal", sans-serif;
-}
-h1, h2, h3 { text-align:center; color:#d63384; font-weight:700; }
-.stButton>button {
-  background:#ffb6c1; color:#fff; border:0; border-radius:12px;
-  padding:.6rem 1rem; font-weight:700;
-}
+body { background: linear-gradient(180deg,#fff8fb 0%,#ffeef5 100%); color:#444; font-family:"Tajawal",sans-serif; }
+h1,h2,h3 { text-align:center; color:#d63384; font-weight:700; }
+.stButton>button { background:#ffb6c1; color:#fff; border:0; border-radius:12px; padding:.6rem 1rem; font-weight:700; }
 .stButton>button:hover { filter:brightness(1.06); }
 [data-testid="stProgress"]>div>div { background:#ffb6c1; }
-textarea, input, select {
-  background:#fff; border-radius:10px; border:1px solid #ffd6e0;
-}
-.task-badge { display:inline-block; padding:.25rem .6rem; background:#ffe3ea; border-radius:999px; color:#c2185b; font-weight:700; }
+textarea,input,select { background:#fff; border-radius:10px; border:1px solid #ffd6e0; }
+.task-badge{display:inline-block;padding:.25rem .6rem;background:#ffe3ea;border-radius:999px;color:#c2185b;font-weight:700;}
 </style>
 """, unsafe_allow_html=True)
 
-# ========= تعريف الشهور =========
+# ========= شهور =========
 MONTHS = {
-    "jan": {"label": "يناير", "days": 31},
-    "feb": {"label": "فبراير", "days": 29},
-    "mar": {"label": "مارس", "days": 31},
-    "apr": {"label": "أبريل", "days": 30},
-    "may": {"label": "مايو", "days": 31},
-    "jun": {"label": "يونيو", "days": 30},
-    "jul": {"label": "يوليو", "days": 31},
-    "aug": {"label": "أغسطس", "days": 31},
-    "sep": {"label": "سبتمبر", "days": 30},
-    "oct": {"label": "أكتوبر", "days": 31},
-    "nov": {"label": "نوفمبر", "days": 30},
-    "dec": {"label": "ديسمبر", "days": 31},
+    "jan":{"label":"يناير","days":31},"feb":{"label":"فبراير","days":29},"mar":{"label":"مارس","days":31},
+    "apr":{"label":"أبريل","days":30},"may":{"label":"مايو","days":31},"jun":{"label":"يونيو","days":30},
+    "jul":{"label":"يوليو","days":31},"aug":{"label":"أغسطس","days":31},"sep":{"label":"سبتمبر","days":30},
+    "oct":{"label":"أكتوبر","days":31},"nov":{"label":"نوفمبر","days":30},"dec":{"label":"ديسمبر","days":31},
 }
 
-# ========= تهيئة الجلسة =========
-def init_state():
-    if "data" not in st.session_state:
-        # tasks: dict id -> name  | next_id: for unique task ids
-        st.session_state.data = {
-            "meta": {"createdAt": datetime.utcnow().isoformat()},
-            "tasks": {},              # {"1":"رياضة", "2":"قراءة", ...}
-            "next_id": 1,
-            "months": {},            # per month: {"tasks": {"1":[bools], ...}, "note":""}
-        }
-    # تأكيد وجود بنية الشهور
-    for m in MONTHS:
-        if m not in st.session_state.data["months"]:
-            st.session_state.data["months"][m] = {"tasks": {}, "note": ""}
+# ========= Supabase =========
+def get_client() -> Client:
+    url = st.secrets["supabase_url"]
+    key = st.secrets["supabase_anon_key"]
+    return create_client(url, key)
 
-    # اختيار الشهر الافتراضي = شهر اليوم
-    if "selected_month" not in st.session_state:
-        now = datetime.now()
-        month_key = list(MONTHS.keys())[now.month - 1]
-        st.session_state.selected_month = month_key
+SUPA: Client | None = None
 
-    # المهمة المختارة
-    if "selected_task_id" not in st.session_state:
-        st.session_state.selected_task_id = None
+def supa_sign_up(email, password):
+    return SUPA.auth.sign_up({"email": email, "password": password})
 
-init_state()
+def supa_sign_in(email, password):
+    return SUPA.auth.sign_in_with_password({"email": email, "password": password})
 
-# ========= عنوان =========
+def supa_get_user():
+    return SUPA.auth.get_user()
+
+def load_cloud_data(user_id):
+    res = SUPA.table("planner_data").select("data").eq("user_id", user_id).maybe_single().execute()
+    if res.data:
+        return res.data["data"]
+    return None
+
+def save_cloud_data(user_id, data):
+    # upsert يحفظ أول مرة ثم يحدّث لاحقًا
+    SUPA.table("planner_data").upsert(
+        {"user_id": user_id, "data": data, "updated_at": datetime.utcnow().isoformat()}
+    ).execute()
+
+# ========= حالة افتراضية محلية =========
+def blank_state():
+    return {
+        "meta": {"createdAt": datetime.utcnow().isoformat()},
+        "tasks": {},        # {"1":"رياضة", ...}
+        "next_id": 1,
+        "months": {m: {"tasks": {}, "note": ""} for m in MONTHS},
+    }
+
+def ensure_month_shapes(data):
+    # تأكيد هيكل الشهور والمهام
+    for m, mobj in MONTHS.items():
+        if m not in data["months"]:
+            data["months"][m] = {"tasks": {}, "note": ""}
+        for tid, name in data["tasks"].items():
+            if tid not in data["months"][m]["tasks"]:
+                data["months"][m]["tasks"][tid] = [False] * mobj["days"]
+
+# ========= تهيئة جلسة =========
+if "data" not in st.session_state: st.session_state.data = blank_state()
+if "selected_month" not in st.session_state:
+    month_key = list(MONTHS.keys())[datetime.now().month - 1]
+    st.session_state.selected_month = month_key
+if "selected_task_id" not in st.session_state: st.session_state.selected_task_id = None
+if "user" not in st.session_state: st.session_state.user = None
+if "cloud_loaded" not in st.session_state: st.session_state.cloud_loaded = False
+
+# ========= ترويسة =========
 st.markdown("<h1>بلانري الجميل 💖</h1>", unsafe_allow_html=True)
 
-# ========= إضافة مهمة جديدة =========
-st.write("### ✨ أضيفي مهمة جديدة")
-new_task = st.text_input("اسم المهمة", placeholder="مثال: رياضة صباحية، قراءة، تعلّم لغة...")
-add_col1, add_col2 = st.columns([1,1])
-with add_col1:
+# ========= تهيئة Supabase =========
+try:
+    SUPA = get_client()
+except Exception:
+    st.error("لم يتم ضبط مفاتيح Supabase في Secrets.")
+    st.stop()
+
+# ========= مصادقة (تسجيل/تسجيل دخول) =========
+with st.expander("تسجيل الدخول / إنشاء حساب", expanded=(st.session_state.user is None)):
+    tab1, tab2 = st.tabs(["تسجيل دخول", "إنشاء حساب جديد"])
+    with tab1:
+        email = st.text_input("الإيميل", key="login_email")
+        pwd = st.text_input("كلمة المرور", type="password", key="login_pwd")
+        if st.button("دخول"):
+            try:
+                supa_sign_in(email, pwd)
+                user = supa_get_user().user
+                st.session_state.user = user
+                st.success("تم تسجيل الدخول ✅")
+            except Exception as e:
+                st.error("فشل تسجيل الدخول. تحقّقي من الإيميل/الرمز.")
+    with tab2:
+        email2 = st.text_input("الإيميل الجديد", key="signup_email")
+        pwd2 = st.text_input("كلمة المرور الجديدة", type="password", key="signup_pwd")
+        if st.button("إنشاء حساب"):
+            try:
+                supa_sign_up(email2, pwd2)
+                st.success("تم إنشاء الحساب. سجّلي الدخول الآن.")
+            except Exception as e:
+                st.error("تعذّر إنشاء الحساب.")
+
+if st.session_state.user is None:
+    st.stop()
+
+# بعد تسجيل الدخول: حمّلي بيانات السحابة مرة واحدة
+if not st.session_state.cloud_loaded:
+    user_id = st.session_state.user.id
+    cloud = load_cloud_data(user_id)
+    if cloud:
+        st.session_state.data = cloud
+    else:
+        # أول دخول: احفظ حالة فارغة للمستخدم
+        save_cloud_data(user_id, st.session_state.data)
+    st.session_state.cloud_loaded = True
+
+data = st.session_state.data
+ensure_month_shapes(data)
+
+# ========= إضافة/حذف مهام =========
+st.write("### ✨ إدارة مهامي")
+new_task = st.text_input("اسم المهمة", placeholder="مثال: رياضة صباحية، قراءة…")
+colA, colB = st.columns([1,1])
+with colA:
     if st.button("➕ إضافة مهمة"):
         name = new_task.strip()
         if name:
-            tid = str(st.session_state.data["next_id"])
-            st.session_state.data["tasks"][tid] = name
-            st.session_state.data["next_id"] += 1
+            tid = str(data["next_id"]); data["next_id"] += 1
+            data["tasks"][tid] = name
+            # إنشاء مصفوفة أيام لكل شهر لهذه المهمة
+            for m, mobj in MONTHS.items():
+                data["months"][m]["tasks"][tid] = [False] * mobj["days"]
             st.session_state.selected_task_id = tid
-            st.success(f"تمت إضافة المهمة: {name} 💗")
+            save_cloud_data(st.session_state.user.id, data)
+            st.success("تمت إضافة المهمة ✨")
         else:
-            st.warning("اكتبي اسم المهمة أولاً.")
-with add_col2:
-    # حذف المهمة المختارة
+            st.warning("اكتبي اسم المهمة أولًا.")
+with colB:
     if st.session_state.selected_task_id and st.button("🗑️ حذف المهمة الحالية"):
         tid = st.session_state.selected_task_id
-        # احذف من قائمة المهام
-        st.session_state.data["tasks"].pop(tid, None)
-        # احذف بياناتها من كل الشهور
-        for m in st.session_state.data["months"].values():
-            if "tasks" in m and tid in m["tasks"]:
-                m["tasks"].pop(tid, None)
+        data["tasks"].pop(tid, None)
+        for m in data["months"].values():
+            m["tasks"].pop(tid, None)
         st.session_state.selected_task_id = None
+        save_cloud_data(st.session_state.user.id, data)
         st.info("تم حذف المهمة.")
 
-st.write("---")
-
-# ========= اختيار الشهر الذي أنتِ فيه =========
+# ========= اختيار الشهر والمهمة =========
 month_keys = list(MONTHS.keys())
 month_labels = [MONTHS[m]["label"] for m in month_keys]
 cur_idx = month_keys.index(st.session_state.selected_month)
-sel_label = st.selectbox("اختاري الشهر:", month_labels, index=cur_idx)
+sel_label = st.selectbox("اختاري الشهر الذي أنتِ فيه:", month_labels, index=cur_idx)
 st.session_state.selected_month = month_keys[month_labels.index(sel_label)]
 
-# ========= اختيار المهمة من قائمة =========
-tasks_dict = st.session_state.data["tasks"]
-task_ids_sorted = sorted(tasks_dict.keys(), key=lambda k: tasks_dict[k])
-task_labels = [tasks_dict[tid] for tid in task_ids_sorted]
-
-st.write("### 🌷 اختاري مهمة لتتبّعيها")
-if task_labels:
-    default_idx = 0
-    if st.session_state.selected_task_id in task_ids_sorted:
-        default_idx = task_ids_sorted.index(st.session_state.selected_task_id)
-    chosen_label = st.selectbox("مهمتي:", task_labels, index=default_idx)
-    chosen_tid = task_ids_sorted[task_labels.index(chosen_label)]
-    st.session_state.selected_task_id = chosen_tid
-    st.markdown(f"<span class='task-badge'>المهمة المختارة: {tasks_dict[chosen_tid]}</span>", unsafe_allow_html=True)
-else:
-    st.info("أضيفي مهمة من الأعلى، ثم اختاريها هنا لعرض البلانر.")
+tasks_dict = data["tasks"]
+if not tasks_dict:
+    st.info("أضيفي مهمة من الأعلى لبدء التتبّع.")
     st.stop()
 
-st.write("---")
-st.markdown("### مهام هذا الشهر")
+sorted_ids = sorted(tasks_dict.keys(), key=lambda k: tasks_dict[k])
+labels = [tasks_dict[i] for i in sorted_ids]
+default_idx = sorted_ids.index(st.session_state.selected_task_id) if st.session_state.selected_task_id in sorted_ids else 0
+chosen = st.selectbox("اختاري مهمة:", labels, index=default_idx)
+tid = sorted_ids[labels.index(chosen)]
+st.session_state.selected_task_id = tid
+st.markdown(f"<span class='task-badge'>المهمة المختارة: {tasks_dict[tid]}</span>", unsafe_allow_html=True)
 
-# ========= بلانر المهمة المختارة لهذا الشهر =========
+st.write("---"); st.markdown("### بلانر هذه المهمة")
+
+# ========= بلانر المهمة للشهر =========
 mkey = st.session_state.selected_month
 mobj = MONTHS[mkey]
-mstate = st.session_state.data["months"][mkey]
+mstate = data["months"][mkey]
+if tid not in mstate["tasks"]:
+    mstate["tasks"][tid] = [False] * mobj["days"]
 
-# أنشئ مصفوفة الأيام لهذه المهمة إن لم تكن موجودة
-if "tasks" not in mstate:
-    mstate["tasks"] = {}
-if st.session_state.selected_task_id not in mstate["tasks"]:
-    mstate["tasks"][st.session_state.selected_task_id] = [False] * mobj["days"]
-
-days_list = mstate["tasks"][st.session_state.selected_task_id]
+days_list = mstate["tasks"][tid]
 done_count = sum(1 for d in days_list if d)
 progress = int((done_count / mobj["days"]) * 100)
 
-st.subheader(tasks_dict[st.session_state.selected_task_id])
+st.subheader(tasks_dict[tid])
 st.progress(progress/100, text=f"تم إنجاز {progress}% ({done_count}/{mobj['days']})")
 
-# شبكة الأيام (كبسة واحدة تقلب حالة اليوم)
 cols = st.columns(7)
+dirty = False
 for day in range(1, mobj["days"] + 1):
     c = cols[(day - 1) % 7]
     done = days_list[day - 1]
-    if c.button(f"{day} {'💗' if done else ''}", key=f"{mkey}_{st.session_state.selected_task_id}_{day}"):
+    if c.button(f"{day} {'💗' if done else ''}", key=f"{mkey}_{tid}_{day}"):
         days_list[day - 1] = not done
+        dirty = True
 
 st.write("---")
-
-# ========= ملاحظة للشهر (عامّة لكل المهام) =========
 st.write("### 🩷 ملاحظات الشهر")
-note = st.text_area("اكتبي ملاحظاتك أو أفكارك لهذا الشهر:", value=mstate.get("note", ""), height=100)
-if note != mstate.get("note", ""):
-    mstate["note"] = note
+note_before = mstate.get("note", "")
+note_after = st.text_area("ملاحظات عامة لهذا الشهر:", value=note_before, height=100)
+if note_after != note_before:
+    mstate["note"] = note_after
+    dirty = True
 
-# ========= إجراءات سريعة على المهمة المختارة =========
-a, b = st.columns(2)
+# أزرار سريعة
+a,b = st.columns(2)
 with a:
-    if st.button("تحديد كل الأيام للمهمة 💖"):
-        for d in range(len(days_list)):
-            days_list[d] = True
+    if st.button("تحديد كل الأيام لهذه المهمة 💖"):
+        for i in range(len(days_list)): days_list[i] = True
+        dirty = True
 with b:
-    if st.button("مسح كل الأيام للمهمة 🩶"):
-        for d in range(len(days_list)):
-            days_list[d] = False
+    if st.button("مسح كل الأيام لهذه المهمة 🩶"):
+        for i in range(len(days_list)): days_list[i] = False
+        dirty = True
 
-st.write("---")
+# حفظ تلقائي عند أي تعديل
+if dirty:
+    save_cloud_data(st.session_state.user.id, data)
+    st.toast("تم الحفظ ✨", icon="💾")
 
-# ========= نسخ احتياطي/استيراد =========
-c1, c2 = st.columns(2)
+# نسخ احتياطي يدوي (اختياري)
+c1,c2 = st.columns(2)
 with c1:
-    st.download_button(
-        "تنزيل نسخة احتياطية 💾",
-        data=json.dumps(st.session_state.data, ensure_ascii=False, indent=2),
+    st.download_button("تنزيل نسخة احتياطية 💾",
+        data=json.dumps(data, ensure_ascii=False, indent=2),
         file_name="routine_backup.json",
-        mime="application/json",
-    )
+        mime="application/json")
 with c2:
     up = st.file_uploader("استيراد نسخة", type=["json"])
     if up:
         try:
             st.session_state.data = json.load(up)
-            st.success("تم الاستيراد بنجاح 🌸")
+            ensure_month_shapes(st.session_state.data)
+            save_cloud_data(st.session_state.user.id, st.session_state.data)
+            st.success("تم الاستيراد والحفظ سحابيًا 🌸")
         except Exception:
             st.error("ملف غير صالح.")
-
-st.caption("✨ أضيفي مهامك، اختاري الشهر الذي أنتِ فيه، وتابعي تقدّمك يومًا بيوم 💗")
